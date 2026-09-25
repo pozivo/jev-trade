@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import type { Market } from "../src/market";
 import type { Model, ModelDecision } from "../src/model";
-import { leverageRungs, liveIntent, parseLeverage, planQuote, quoteAction } from "../src/plan";
+import { capEntry, leverageRungs, liveIntent, parseLeverage, planQuote, quoteAction } from "../src/plan";
 import { jevUnavailable, Trader } from "../src/trader";
 import type { BlockEvent, Book, Quote, Side } from "../src/types";
 
@@ -43,6 +43,16 @@ test("hold sends nothing, whatever the bias or position", () => {
   expect(planQuote({ intent: "hold", bias: "long", positionSz: 0, quoteSz: 0.01 })).toBe(null);
   expect(planQuote({ intent: "hold", bias: "short", positionSz: 0.08, quoteSz: 0.01 })).toBe(null);
   expect(planQuote({ intent: "hold", bias: "long", positionSz: -0.08, quoteSz: 0.01 })).toBe(null);
+});
+
+test("entry cap rounds down to a valid lot and never blocks a close", () => {
+  const open = planQuote({ intent: "open", bias: "long", positionSz: 1.5, quoteSz: 1 });
+  expect(capEntry(open, 1.5, 100, 200, 2)?.size).toBe(0.5);
+  expect(capEntry(open, 2, 100, 200, 2)).toBeNull();
+  expect(capEntry(open, 1.999, 100, 200, 2)).toBeNull();
+  expect(capEntry(open, 0, 100, NaN, 2)).toBeNull();
+  const close = planQuote({ intent: "close", bias: "long", positionSz: 3, quoteSz: 1 });
+  expect(capEntry(close, 3, 100, 200, 2)).toEqual(close);
 });
 
 test("liveIntent cannot close a flat book and stands down instead", () => {
@@ -161,8 +171,23 @@ test("a busy tick still emits late so the desk can show it", async () => {
 
 test("a failed Jev call emits late instead of going silent", async () => {
   const model = new ScriptModel();
-  const { events, trader } = desk(model);
+  const { events, trader, market } = desk(model);
   model.next = new Error("boom");
   await trader.onBlock(1);
   expect(events.some((e) => e.decision?.late === true)).toBe(true);
+  await Bun.sleep(0);
+  expect(market.cancels).toBe(1);
+});
+
+test("a model failure pulls the preceding resting quote", async () => {
+  const model = new ScriptModel();
+  const { trader, market } = desk(model);
+  model.next = packed({ intent: "open", bias: "long", action: "buy" });
+  await trader.onBlock(1);
+  await Bun.sleep(0);
+  expect(market.lastOid).toBe(4242);
+  model.next = new Error("model unavailable");
+  await trader.onBlock(2);
+  await Bun.sleep(0);
+  expect(market.lastOid).toBeNull();
 });

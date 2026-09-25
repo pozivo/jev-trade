@@ -298,7 +298,7 @@ export class Market {
   async cancelResting(): Promise<number[]> {
     const oid = this.lastOid;
     if (!this.ex || oid == null) return [];
-    await this.ex.cancel({ cancels: [{ a: this.assetId, o: oid }] }).catch(() => {});
+    await this.ex.cancel({ cancels: [{ a: this.assetId, o: oid }] });
     this.forgetResting();
     return [oid];
   }

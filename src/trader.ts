@@ -2,7 +2,7 @@ import { config } from "./config";
 import { bpsBetween, snapshotIndicators, venueFeatures } from "./indicators";
 import type { Market } from "./market";
 import type { Model, ModelDecision, TradeState } from "./model";
-import { planQuote, type QuotePlan } from "./plan";
+import { capEntry, planQuote, type QuotePlan } from "./plan";
 import { aggregateFills, emptySummary, takeLiveFills, takeSimFills, type Resting, type TradeFeed } from "./trades";
 import type { BlockEvent, Book, Fill, PricePoint, Quote, Side, Timing, Totals } from "./types";
 
@@ -73,6 +73,7 @@ export class Trader {
       this.syncFromVenue();
       const timing = { readMs: Math.round(readMs), loopMs: 0 };
       if (Date.now() < this.jevPauseUntil) {
+        this.enqueueStandDown();
         this.markLate(block, book);
         return;
       }
@@ -80,12 +81,12 @@ export class Trader {
         const decision = await this.model.decide(this.buildState(block, book));
         this.totals.decisions++;
         this.totals.jevUsd += (decision.inputTokens / 1e6) * config.jevUsdPerMTok;
-        const plan = planQuote({
+        const plan = capEntry(planQuote({
           intent: decision.intent,
           bias: decision.bias,
           positionSz: this.position.sz,
           quoteSz: this.market.quoteSize(book.mid),
-        });
+        }), this.position.sz, book.mid, config.maxPositionUsd, this.market.szDecimals);
         timing.loopMs = Math.round(performance.now() - t0);
         this.emit(block, book, decision, null, false, timing);
         if (plan) this.enqueueQuote(block, decision, plan, book);
@@ -98,10 +99,12 @@ export class Trader {
         } else {
           console.error(`tick ${block}:`, msg);
         }
+        this.enqueueStandDown();
         this.markLate(block, book, timing);
       }
     } catch (e) {
       console.error(`tick ${block}:`, (e as Error).message);
+      this.enqueueStandDown();
     } finally {
       this.busy = false;
     }

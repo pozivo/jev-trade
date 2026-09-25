@@ -51,6 +51,8 @@ export const config = {
   dryRun: env("DRY_RUN") === "true",
   /** Target notional of one post-only quote. */
   quoteUsd: Number(env("QUOTE_USD", "40")),
+  /** Maximum absolute position notional per sleeve before another entry. */
+  maxPositionUsd: Number(env("MAX_POSITION_USD", "200")),
   quoteInsideTicks: Number(env("QUOTE_INSIDE_TICKS", "1")),
   /** How far an Ioc exit crosses the touch so it fills on the spot. */
   closeSlippageBps: Number(env("CLOSE_SLIPPAGE_BPS", "5")),

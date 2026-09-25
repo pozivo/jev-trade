@@ -41,6 +41,16 @@ export interface QuotePlan {
   taker: boolean;
 }
 
+/** Limit additional exposure per sleeve; exits remain unrestricted. */
+export function capEntry(plan: QuotePlan | null, positionSz: number, mid: number, maxUsd: number, szDecimals: number): QuotePlan | null {
+  if (!plan || plan.reduceOnly) return plan;
+  if (!Number.isFinite(mid) || mid <= 0 || !Number.isFinite(maxUsd) || maxUsd <= 0) return null;
+  const remaining = maxUsd / mid - Math.abs(positionSz);
+  const step = 10 ** Math.max(0, Math.floor(szDecimals));
+  const size = Math.min(plan.size, Math.floor((remaining + 1e-12) * step) / step);
+  return size > 0 ? { ...plan, size } : null;
+}
+
 /** Map Jev's open/close/hold + long/short onto one order. `null` means pull the book. */
 export function planQuote(opts: {
   intent: Intent;
