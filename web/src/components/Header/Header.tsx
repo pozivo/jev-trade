@@ -10,6 +10,9 @@ export interface HeaderProps {
   balance: number | null;
   unrealized: number | null;
   realized: number | null;
+  sessionNet: number | null;
+  jevEstimate: number | null;
+  dryRun: boolean;
 }
 
 function Score({
@@ -43,7 +46,7 @@ function GitHubMark() {
   );
 }
 
-export default function Header({ connection, balance, unrealized, realized }: HeaderProps) {
+export default function Header({ connection, balance, unrealized, realized, sessionNet, jevEstimate, dryRun }: HeaderProps) {
   const live = connection === "live";
 
   return (
@@ -72,6 +75,8 @@ export default function Header({ connection, balance, unrealized, realized }: He
         <Score label="balance" value={balance} signed={false} />
         <Score label="unrealized" value={unrealized} />
         <Score label="realized" value={realized} />
+        <Score label={dryRun ? "sim net est." : "session net est."} value={sessionNet} />
+        <Score label="jev est." value={jevEstimate} signed={false} />
       </span>
     </div>
   );

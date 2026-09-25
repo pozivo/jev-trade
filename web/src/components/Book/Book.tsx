@@ -203,6 +203,7 @@ export default function Book({
                   <th>Exit</th>
                   <th>PnL</th>
                   <th>Fee</th>
+                  <th>Net</th>
                 </tr>
               </thead>
               <tbody>
@@ -211,6 +212,7 @@ export default function Book({
                     <td><Bone w={64} h={10} /></td>
                     <td><Bone w={36} h={10} /></td>
                     <td><Bone w={40} h={10} /></td>
+                    <td><Bone w={56} h={10} /></td>
                     <td><Bone w={48} h={10} /></td>
                     <td><Bone w={56} h={10} /></td>
                     <td><Bone w={56} h={10} /></td>
@@ -236,6 +238,7 @@ export default function Book({
                   <th>Exit</th>
                   <th>PnL</th>
                   <th>Fee</th>
+                  <th>Net</th>
                 </tr>
               </thead>
               <tbody>
@@ -252,6 +255,7 @@ export default function Book({
                       <td>{fmtPrice(lot.exit)}</td>
                       <td style={{ color: pnlColor }}>{fmtSignedUsd(lot.pnl, 2)}</td>
                       <td>{lot.fee ? fmtUsd(lot.fee, 2) : "-"}</td>
+                      <td style={{ color: lot.net >= 0 ? "var(--pnl-pos)" : "var(--pnl-neg)" }}>{fmtSignedUsd(lot.net, 2)}</td>
                     </tr>
                   );
                 })}

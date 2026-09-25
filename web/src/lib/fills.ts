@@ -22,6 +22,7 @@ export type ClosedLot = {
   exit: number;
   pnl: number;
   fee: number;
+  net: number;
   hash?: string;
 };
 
@@ -65,6 +66,7 @@ export function closedLots(fills: TapeFill[]): ClosedLot[] {
   let pos = 0;
   let avgEntry: number | null = null;
   let openedTs: number | null = null;
+  let entryFees = 0;
   const out: ClosedLot[] = [];
 
   const emit = (f: TapeFill, side: "long" | "short", size: number) => {
@@ -73,7 +75,11 @@ export function closedLots(fills: TapeFill[]): ClosedLot[] {
     const pnl = typeof venue === "number" && Number.isFinite(venue)
       ? venue
       : markPnl(side, size, avgEntry, f.price);
-    const fee = typeof f.feeUsd === "number" && Number.isFinite(f.feeUsd) ? f.feeUsd : 0;
+    const closedFraction = Math.min(1, size / Math.abs(pos));
+    const allocatedEntryFee = entryFees * closedFraction;
+    entryFees -= allocatedEntryFee;
+    const exitFee = typeof f.feeUsd === "number" && Number.isFinite(f.feeUsd) ? f.feeUsd * Math.min(1, size / f.size) : 0;
+    const fee = allocatedEntryFee + exitFee;
     out.push({
       key: `${f.key}|${side}|${size}`,
       ts: f.ts,
@@ -84,6 +90,7 @@ export function closedLots(fills: TapeFill[]): ClosedLot[] {
       exit: f.price,
       pnl,
       fee,
+      net: pnl - fee,
       hash: f.hash,
     });
   };
@@ -97,6 +104,7 @@ export function closedLots(fills: TapeFill[]): ClosedLot[] {
       const abs = Math.abs(pos);
       avgEntry = abs <= EPS ? f.price : ((avgEntry ?? f.price) * abs + f.price * f.size) / (abs + f.size);
       if (abs <= EPS) openedTs = f.ts;
+      entryFees += f.feeUsd ?? 0;
       pos += f.side === "buy" ? f.size : -f.size;
       continue;
     }
@@ -109,6 +117,7 @@ export function closedLots(fills: TapeFill[]): ClosedLot[] {
         pos = 0;
         avgEntry = null;
         openedTs = null;
+        entryFees = 0;
       }
       continue;
     }
@@ -120,10 +129,12 @@ export function closedLots(fills: TapeFill[]): ClosedLot[] {
       pos = f.side === "buy" ? leftover : -leftover;
       avgEntry = f.price;
       openedTs = f.ts;
+      entryFees = (f.feeUsd ?? 0) * (leftover / f.size);
     } else {
       pos = 0;
       avgEntry = null;
       openedTs = null;
+      entryFees = 0;
     }
   }
 

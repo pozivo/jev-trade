@@ -16,10 +16,10 @@ test("tapeFills reads venue marks off the mid series and skips empty prints", ()
 
 test("closedLots turns an open then close into one settled row", () => {
   const lots = closedLots([
-    { key: "a", ts: 1000, side: "buy", price: 100, size: 2, dir: "open" },
+    { key: "a", ts: 1000, side: "buy", price: 100, size: 2, dir: "open", feeUsd: 0.2 },
     { key: "b", ts: 2000, side: "sell", price: 110, size: 2, dir: "close", closedPnl: 18.5, feeUsd: 0.4, hash: "0x1" },
   ]);
-  expect(lots).toEqual([{
+  expect(lots).toMatchObject([{
     key: "b|long|2",
     ts: 2000,
     openedTs: 1000,
@@ -28,9 +28,22 @@ test("closedLots turns an open then close into one settled row", () => {
     entry: 100,
     exit: 110,
     pnl: 18.5,
-    fee: 0.4,
     hash: "0x1",
   }]);
+  expect(lots[0]!.fee).toBeCloseTo(0.6);
+  expect(lots[0]!.net).toBeCloseTo(17.9);
+});
+
+test("partial closes allocate entry fees without charging them twice", () => {
+  const lots = closedLots([
+    { key: "a", ts: 1, side: "buy", price: 100, size: 2, dir: "open", feeUsd: 0.2 },
+    { key: "b", ts: 2, side: "sell", price: 110, size: 1, dir: "close", feeUsd: 0.05, closedPnl: 10 },
+    { key: "c", ts: 3, side: "sell", price: 120, size: 1, dir: "close", feeUsd: 0.05, closedPnl: 20 },
+  ]);
+  expect(lots[0]!.fee).toBeCloseTo(0.15);
+  expect(lots[1]!.fee).toBeCloseTo(0.15);
+  expect(lots[0]!.net).toBeCloseTo(9.85);
+  expect(lots[1]!.net).toBeCloseTo(19.85);
 });
 
 test("closedLots averages stacked entries and uses mark pnl when the venue omits it", () => {

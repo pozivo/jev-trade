@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
 import type { Market } from "../src/market";
 import type { Model, ModelDecision } from "../src/model";
-import { leverageRungs, liveIntent, parseLeverage, planQuote, quoteAction } from "../src/plan";
+import { capEntry, leverageRungs, liveIntent, parseLeverage, planQuote, quoteAction } from "../src/plan";
 import { jevUnavailable, Trader } from "../src/trader";
+import { config } from "../src/config";
 import type { BlockEvent, Book, Quote, Side } from "../src/types";
 
 test("jevUnavailable detects a TypeSafe credit 402", () => {
@@ -45,6 +46,16 @@ test("hold sends nothing, whatever the bias or position", () => {
   expect(planQuote({ intent: "hold", bias: "long", positionSz: -0.08, quoteSz: 0.01 })).toBe(null);
 });
 
+test("entry cap rounds down to a valid lot and never blocks a close", () => {
+  const open = planQuote({ intent: "open", bias: "long", positionSz: 1.5, quoteSz: 1 });
+  expect(capEntry(open, 1.5, 100, 200, 2)?.size).toBe(0.5);
+  expect(capEntry(open, 2, 100, 200, 2)).toBeNull();
+  expect(capEntry(open, 1.999, 100, 200, 2)).toBeNull();
+  expect(capEntry(open, 0, 100, NaN, 2)).toBeNull();
+  const close = planQuote({ intent: "close", bias: "long", positionSz: 3, quoteSz: 1 });
+  expect(capEntry(close, 3, 100, 200, 2)).toEqual(close);
+});
+
 test("liveIntent cannot close a flat book and stands down instead", () => {
   expect(liveIntent("flat", "close")).toBe("hold");
   expect(liveIntent("flat", "hold")).toBe("hold");
@@ -85,7 +96,7 @@ function packed(partial: Partial<ModelDecision> & Pick<ModelDecision, "intent" |
 }
 
 class ScriptModel implements Model {
-  readonly name = "script";
+  constructor(readonly name = "script") {}
   next: ModelDecision | Error = packed({ intent: "hold", bias: "long", action: "hold" });
   delayMs = 0;
   async decide(): Promise<ModelDecision> {
@@ -106,13 +117,20 @@ class FakeMarket {
   assetCtx = null;
   lastOid: number | null = null;
   cancels = 0;
+  sends = 0;
+  requestedLeverage: number | null = null;
+  failLeverage = false;
   sendDelayMs = 0;
   candleCloses() { return []; }
   refresh() { return Promise.resolve(); }
   readBook() { return book; }
   quoteSize() { return 0.01; }
-  setLeverage(n: number) { return Promise.resolve(n); }
+  setLeverage(n: number) {
+    this.requestedLeverage = n;
+    return this.failLeverage ? Promise.reject(new Error("leverage update failed")) : Promise.resolve(n);
+  }
   async send(side: Side, size: number, _book: Book, cancel: number[]): Promise<Quote> {
+    this.sends++;
     if (this.sendDelayMs) await Bun.sleep(this.sendDelayMs);
     this.lastOid = 4242;
     return {
@@ -161,8 +179,61 @@ test("a busy tick still emits late so the desk can show it", async () => {
 
 test("a failed Jev call emits late instead of going silent", async () => {
   const model = new ScriptModel();
-  const { events, trader } = desk(model);
+  const { events, trader, market } = desk(model);
   model.next = new Error("boom");
   await trader.onBlock(1);
   expect(events.some((e) => e.decision?.late === true)).toBe(true);
+  await Bun.sleep(0);
+  expect(market.cancels).toBe(1);
+});
+
+test("a model failure pulls the preceding resting quote", async () => {
+  const model = new ScriptModel();
+  const { trader, market } = desk(model);
+  model.next = packed({ intent: "open", bias: "long", action: "buy" });
+  await trader.onBlock(1);
+  await Bun.sleep(0);
+  expect(market.lastOid).toBe(4242);
+  model.next = new Error("model unavailable");
+  await trader.onBlock(2);
+  await Bun.sleep(0);
+  expect(market.lastOid).toBeNull();
+});
+
+test("the hard leverage cap is applied before sending an entry", async () => {
+  const model = new ScriptModel();
+  const { trader, market, events } = desk(model);
+  model.next = packed({ intent: "open", bias: "long", action: "buy", leverage: 40 });
+  await trader.onBlock(1);
+  await Bun.sleep(0);
+  expect(market.requestedLeverage).toBe(config.maxLeverage);
+  expect(events[0]?.decision?.leverage).toBe(config.maxLeverage);
+  expect(market.sends).toBe(1);
+});
+
+test("a failed leverage update prevents the entry", async () => {
+  const model = new ScriptModel();
+  const { trader, market } = desk(model);
+  market.failLeverage = true;
+  model.next = packed({ intent: "open", bias: "long", action: "buy", leverage: 40 });
+  await trader.onBlock(1);
+  await Bun.sleep(0);
+  expect(market.sends).toBe(0);
+});
+
+test("mock model calls do not accrue Jev API costs", async () => {
+  const model = new ScriptModel();
+  const { trader, events } = desk(model);
+  model.next = packed({ intent: "hold", bias: "long", action: "hold", inputTokens: 1000 });
+  await trader.onBlock(1);
+  expect(events[0]?.totals.jevUsd).toBe(0);
+});
+
+test("session net includes estimated Jev API spend from the first decision", async () => {
+  const model = new ScriptModel("jev");
+  const { trader, events } = desk(model);
+  model.next = packed({ intent: "hold", bias: "long", action: "hold", inputTokens: 1000 });
+  await trader.onBlock(1);
+  expect(events[0]?.totals.jevUsd).toBeCloseTo(0.000042, 8);
+  expect(events[0]?.totals.sessionNetUsd).toBeCloseTo(-0.000042, 8);
 });

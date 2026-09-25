@@ -173,7 +173,7 @@ export class Market {
       return leverage;
     } catch (e) {
       console.warn(`${this.label} leverage: ${(e as Error).message.slice(0, 160)}`);
-      return this.account?.leverage ?? leverage;
+      throw e;
     }
   }
 
@@ -298,7 +298,7 @@ export class Market {
   async cancelResting(): Promise<number[]> {
     const oid = this.lastOid;
     if (!this.ex || oid == null) return [];
-    await this.ex.cancel({ cancels: [{ a: this.assetId, o: oid }] }).catch(() => {});
+    await this.ex.cancel({ cancels: [{ a: this.assetId, o: oid }] });
     this.forgetResting();
     return [oid];
   }

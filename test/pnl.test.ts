@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { portfolioBalance, portfolioPnl, roePct, sleevePnl } from "../web/src/lib/pnl";
+import { portfolioBalance, portfolioPnl, portfolioSession, roePct, sleevePnl } from "../web/src/lib/pnl";
 import type { BlockEvent } from "../src/types";
 
 function event(partial: Partial<BlockEvent> & Pick<BlockEvent, "coin" | "position" | "totals">): BlockEvent {
@@ -24,7 +24,7 @@ test("sleevePnl splits open mark pnl from closed fills", () => {
     position: { side: "long", size: 0.01, entryPrice: 100, leverage: 10, unrealizedUsd: 2.5, unrealizedSz: 0 },
     totals: {
       blocks: 1, decisions: 1, quotes: 1, fills: 2, reverted: 0, lateBlocks: 0,
-      jevUsd: 0, gasSz: 0, gasUsd: 0.1, realizedUsd: -4, pnlUsd: -1.5, pnlSz: 0, pnlPct: 0,
+      jevUsd: 0.2, gasSz: 0, gasUsd: 0.1, realizedUsd: -4, pnlUsd: -1.5, pnlSz: 0, pnlPct: 0, sessionNetUsd: -0.7,
     },
   });
   expect(sleevePnl(open)).toEqual({ coin: "BTC", unrealized: 2.5, realized: -4, open: true });
@@ -33,11 +33,13 @@ test("sleevePnl splits open mark pnl from closed fills", () => {
     position: { side: "flat", size: 0, entryPrice: null, leverage: 10, unrealizedUsd: 0, unrealizedSz: 0 },
     totals: {
       blocks: 1, decisions: 1, quotes: 0, fills: 1, reverted: 0, lateBlocks: 0,
-      jevUsd: 0, gasSz: 0, gasUsd: 0, realizedUsd: 3, pnlUsd: 3, pnlSz: 0, pnlPct: 0,
+      jevUsd: 0.1, gasSz: 0, gasUsd: 0, realizedUsd: 3, pnlUsd: 3, pnlSz: 0, pnlPct: 0, sessionNetUsd: 1.5,
     },
   });
   expect(sleevePnl(flat)).toEqual({ coin: "ETH", unrealized: 0, realized: 3, open: false });
   expect(portfolioPnl({ BTC: open, ETH: flat })).toEqual({ unrealized: 2.5, realized: -1 });
+  expect(portfolioSession({ BTC: open, ETH: flat }).net).toBeCloseTo(0.8);
+  expect(portfolioSession({ BTC: open, ETH: flat }).jevEstimate).toBeCloseTo(0.3);
   expect(portfolioBalance({ BTC: { ...open, accountValue: 120.4 }, ETH: { ...flat, accountValue: 80 } })).toBeCloseTo(200.4);
   expect(portfolioBalance({ BTC: open, ETH: flat })).toBeNull();
 });

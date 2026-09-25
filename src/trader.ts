@@ -2,13 +2,13 @@ import { config } from "./config";
 import { bpsBetween, snapshotIndicators, venueFeatures } from "./indicators";
 import type { Market } from "./market";
 import type { Model, ModelDecision, TradeState } from "./model";
-import { planQuote, type QuotePlan } from "./plan";
+import { capEntry, planQuote, type QuotePlan } from "./plan";
 import { aggregateFills, emptySummary, takeLiveFills, takeSimFills, type Resting, type TradeFeed } from "./trades";
 import type { BlockEvent, Book, Fill, PricePoint, Quote, Side, Timing, Totals } from "./types";
 
 const emptyTotals = (): Totals => ({
   blocks: 0, decisions: 0, quotes: 0, fills: 0, reverted: 0, lateBlocks: 0,
-  jevUsd: 0, gasSz: 0, gasUsd: 0, realizedUsd: 0, pnlUsd: 0, pnlSz: 0, pnlPct: 0,
+  jevUsd: 0, gasSz: 0, gasUsd: 0, realizedUsd: 0, pnlUsd: 0, pnlSz: 0, pnlPct: 0, sessionNetUsd: 0,
 });
 
 const JEV_PAUSE_MS = 30_000;
@@ -36,6 +36,7 @@ export class Trader {
   private position = { sz: 0, costUsd: 0 };
   private totals: Totals = emptyTotals();
   private jevPauseUntil = 0;
+  private startTradingPnl: number | null = null;
 
   constructor(
     private market: Market,
@@ -73,19 +74,21 @@ export class Trader {
       this.syncFromVenue();
       const timing = { readMs: Math.round(readMs), loopMs: 0 };
       if (Date.now() < this.jevPauseUntil) {
+        this.enqueueStandDown();
         this.markLate(block, book);
         return;
       }
       try {
-        const decision = await this.model.decide(this.buildState(block, book));
+        const picked = await this.model.decide(this.buildState(block, book));
+        const decision = { ...picked, leverage: Math.min(picked.leverage, config.maxLeverage, this.market.maxLeverage) };
         this.totals.decisions++;
-        this.totals.jevUsd += (decision.inputTokens / 1e6) * config.jevUsdPerMTok;
-        const plan = planQuote({
+        if (this.model.name === "jev") this.totals.jevUsd += (decision.inputTokens / 1e6) * config.jevUsdPerMTok;
+        const plan = capEntry(planQuote({
           intent: decision.intent,
           bias: decision.bias,
           positionSz: this.position.sz,
           quoteSz: this.market.quoteSize(book.mid),
-        });
+        }), this.position.sz, book.mid, config.maxPositionUsd, this.market.szDecimals);
         timing.loopMs = Math.round(performance.now() - t0);
         this.emit(block, book, decision, null, false, timing);
         if (plan) this.enqueueQuote(block, decision, plan, book);
@@ -98,10 +101,12 @@ export class Trader {
         } else {
           console.error(`tick ${block}:`, msg);
         }
+        this.enqueueStandDown();
         this.markLate(block, book, timing);
       }
     } catch (e) {
       console.error(`tick ${block}:`, (e as Error).message);
+      this.enqueueStandDown();
     } finally {
       this.busy = false;
     }
@@ -121,7 +126,7 @@ export class Trader {
       const quote = await this.market.send(plan.side, plan.size, book, cancel, plan.reduceOnly, plan.taker);
       if (seq !== this.sendSeq) return;
       this.applyPosted(block, quote);
-    });
+    }).catch((e) => console.error(`quote ${block}: ${(e as Error).message}`));
   }
 
   /** Jev held. Pull the standing quote so an order it no longer wants cannot get hit. */
@@ -132,7 +137,7 @@ export class Trader {
       await this.market.cancelResting();
       if (seq !== this.sendSeq) return;
       this.orders.clear();
-    });
+    }).catch((e) => console.error(`cancel resting: ${(e as Error).message}`));
   }
 
   private markLate(block: number, book: Book | null, timing?: Timing) {
@@ -240,8 +245,8 @@ export class Trader {
         unrealizedUsd: round(unrealized, 4),
       },
       indicators,
-      asset: { ...asset, maxLeverage: this.market.maxLeverage },
-      maxLeverage: this.market.maxLeverage,
+      asset: { ...asset, maxLeverage: Math.min(this.market.maxLeverage, config.maxLeverage) },
+      maxLeverage: Math.min(this.market.maxLeverage, config.maxLeverage),
     };
   }
 
@@ -286,6 +291,10 @@ export class Trader {
     const a = this.market.account;
     const unrealized = a ? a.unrealizedUsd : this.unrealizedUsd(book.mid);
     t.pnlUsd = t.realizedUsd + unrealized - t.gasUsd;
+    // Wait for a live clearinghouse snapshot before taking a trading baseline.
+    // Otherwise historical venue PnL arriving later would look like this session's profit.
+    if (this.startTradingPnl === null && (!this.market.wallet || a)) this.startTradingPnl = t.pnlUsd;
+    t.sessionNetUsd = (this.startTradingPnl === null ? 0 : t.pnlUsd - this.startTradingPnl) - t.jevUsd;
     t.pnlSz = t.pnlUsd / book.mid;
     t.pnlPct = (t.pnlUsd / (a?.accountValue || config.bankrollUsd)) * 100;
     const size = Math.abs(this.position.sz);
@@ -315,7 +324,7 @@ export class Trader {
         unrealizedUsd: round(unrealized, 6),
         unrealizedSz: round(unrealized / book.mid, 8),
       },
-      totals: { ...t, jevUsd: round(t.jevUsd, 6), gasSz: round(t.gasSz, 8), gasUsd: round(t.gasUsd, 6), realizedUsd: round(t.realizedUsd, 6), pnlUsd: round(t.pnlUsd, 6), pnlSz: round(t.pnlSz, 8), pnlPct: round(t.pnlPct, 4) },
+      totals: { ...t, jevUsd: round(t.jevUsd, 6), gasSz: round(t.gasSz, 8), gasUsd: round(t.gasUsd, 6), realizedUsd: round(t.realizedUsd, 6), pnlUsd: round(t.pnlUsd, 6), pnlSz: round(t.pnlSz, 8), pnlPct: round(t.pnlPct, 4), sessionNetUsd: round(t.sessionNetUsd, 6) },
       accountValue: a && Number.isFinite(a.accountValue) ? round(a.accountValue, 2) : null,
       withdrawable: a && Number.isFinite(a.withdrawable) ? round(a.withdrawable, 2) : null,
     };
