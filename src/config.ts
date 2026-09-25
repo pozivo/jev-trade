@@ -55,6 +55,8 @@ export const config = {
   maxPositionUsd: Number(env("MAX_POSITION_USD", "200")),
   /** Hard ceiling on leverage requested from the venue, independent of Jev's pick. */
   maxLeverage: Math.max(1, Math.floor(Number(env("MAX_LEVERAGE", "2")) || 1)),
+  stopLossBps: Number(env("STOP_LOSS_BPS", "100")),
+  takeProfitBps: Number(env("TAKE_PROFIT_BPS", "200")),
   quoteInsideTicks: Number(env("QUOTE_INSIDE_TICKS", "1")),
   /** How far an Ioc exit crosses the touch so it fills on the spot. */
   closeSlippageBps: Number(env("CLOSE_SLIPPAGE_BPS", "5")),

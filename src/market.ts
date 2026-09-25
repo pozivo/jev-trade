@@ -4,6 +4,7 @@ import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { config } from "./config";
 import { accountFromClearinghouse, fillDir, FillPnlBook, type ClearinghouseLike, type FillPnlLike, type VenueAccount } from "./account";
 import { quotePrice, takerPrice } from "./book";
+import { matchesProtection, protectionOrders } from "./protection";
 import type { Feed } from "./feed";
 import { sameCoin, type SleeveConfig } from "./sleeves";
 import type { Book, Fill, Quote, Side } from "./types";
@@ -31,6 +32,11 @@ export class Market {
   private lastSize = 0;
   private lastReduce = false;
   private fills = new FillPnlBook();
+  private protectionTail: Promise<void> = Promise.resolve();
+  private protectionPending: Promise<void> | null = null;
+  private protectedSignature = "";
+  private protectionCheckedAt = 0;
+  private seedingFills = false;
   readonly fillPrints: { ts: number; side: Side; price: number; size: number; dir?: Fill["dir"]; hash?: string }[] = [];
   onVenueFill: ((fill: { ts: number; side: Side; price: number; size: number; dir?: Fill["dir"]; hash?: string }) => void) | null = null;
 
@@ -72,6 +78,7 @@ export class Market {
     if (assetId == null || szDecimals == null) throw new Error(`unknown Hyperliquid coin ${this.coin}`);
     this.assetId = assetId;
     this.szDecimals = szDecimals;
+    if (this.wallet) protectionOrders(1, 100, this.szDecimals, config.stopLossBps, config.takeProfitBps);
     if (this.wallet && this.ex) {
       this.feed.onClearinghouse = (state) => this.applyClearinghouse(state);
       this.feed.onUserPnl = (fill) => this.noteFill(fill);
@@ -84,6 +91,7 @@ export class Market {
     await this.loadMaxLeverage();
     await this.refresh();
     if (this.address) await this.seedFills();
+    if (this.wallet) await this.ensureProtection();
     const net = config.hlTestnet ? "testnet" : "mainnet";
     console.log(`hyperliquid · ${this.pair} ${net} · ${this.coin} asset ${this.assetId} · szDecimals ${this.szDecimals} · max ${this.maxLeverage}x · ${config.dryRun ? "DRY RUN" : `wallet ${this.address}`}`);
     if (this.wallet) {
@@ -98,18 +106,80 @@ export class Market {
   private async clearOpen() {
     if (!this.wallet || !this.ex) return;
     try {
-      const opens = await this.info.openOrders({ user: this.wallet.address });
-      const mine = opens.filter((o) => sameCoin(o.coin, this.coin));
+      const opens = await this.info.frontendOpenOrders({ user: this.wallet.address });
+      const mine = opens.filter((o) => sameCoin(o.coin, this.coin) && !o.isTrigger);
       if (!mine.length) return;
       await this.ex.cancel({ cancels: mine.map((o) => ({ a: this.assetId, o: o.oid })) });
-    } catch {
-      // next quote will replace if we still see them
+    } catch (e) {
+      throw new Error(`cannot clear existing ${this.coin} entry orders`, { cause: e });
     }
   }
 
   applyClearinghouse(state: ClearinghouseLike) {
+    const before = this.account;
     this.account = this.fills.apply(accountFromClearinghouse(state, this.coin, this.account));
     this.margin.usdc = this.account.withdrawable;
+    if (this.wallet && this.account.positionSz &&
+      (before?.positionSz !== this.account.positionSz || before.entryPrice !== this.account.entryPrice)) {
+      this.scheduleProtection();
+    }
+  }
+
+  private scheduleProtection() {
+    if (this.protectionPending) return;
+    this.protectionPending = this.ensureProtection()
+      .catch((e) => console.error(`${this.label} TP/SL: ${(e as Error).message}`))
+      .finally(() => { this.protectionPending = null; });
+  }
+
+  /** Confirm both position-linked triggers on the venue before adding exposure. */
+  async ensureProtection(): Promise<void> {
+    if (!this.wallet || !this.ex) return;
+    this.protectionTail = this.protectionTail.catch(() => {}).then(() => this.checkProtection());
+    return this.protectionTail;
+  }
+
+  private async checkProtection() {
+    const account = this.account;
+    if (!account) throw new Error("no clearinghouse snapshot; entry blocked");
+    const signature = account.positionSz ? `${account.positionSz}:${account.entryPrice}` : "flat";
+    if (signature === this.protectedSignature && Date.now() - this.protectionCheckedAt < 15_000) return;
+    if (!account.positionSz) {
+      const leftover = (await this.info.frontendOpenOrders({ user: this.wallet!.address }))
+        .some((o) => sameCoin(o.coin, this.coin) && o.isPositionTpsl && o.isTrigger);
+      if (leftover) throw new Error("stale position TP/SL orders remain; entry blocked");
+      this.protectedSignature = signature;
+      this.protectionCheckedAt = Date.now();
+      return;
+    }
+    if (!account.entryPrice) throw new Error("no position entry price; entry blocked");
+    const desired = protectionOrders(account.positionSz, account.entryPrice, this.szDecimals, config.stopLossBps, config.takeProfitBps);
+    const open = (await this.info.frontendOpenOrders({ user: this.wallet!.address }))
+      .filter((o) => sameCoin(o.coin, this.coin) && o.isPositionTpsl && o.isTrigger);
+    if (open.some((o) => !desired.some((d) => matchesProtection(o, d)))) {
+      throw new Error("position has different TP/SL orders; review them before adding exposure");
+    }
+    for (const d of desired) {
+      if (open.some((o) => matchesProtection(o, d))) continue;
+      const response = await this.ex!.order({
+        orders: [{
+          a: this.assetId, b: d.side === "buy", p: d.limitPx, s: d.size, r: true,
+          t: { trigger: { isMarket: true, triggerPx: d.triggerPx, tpsl: d.kind } },
+        }],
+        grouping: "positionTpsl",
+      });
+      const status = response.response.data.statuses[0];
+      if (!status || (typeof status === "object" && "error" in status)) {
+        throw new Error(`${d.kind} rejected: ${typeof status === "object" && status && "error" in status ? status.error : String(status)}`);
+      }
+    }
+    const confirmed = (await this.info.frontendOpenOrders({ user: this.wallet!.address }))
+      .filter((o) => sameCoin(o.coin, this.coin) && o.isTrigger);
+    if (!desired.every((d) => confirmed.some((o) => matchesProtection(o, d)))) {
+      throw new Error("TP/SL not confirmed in open orders; entry blocked");
+    }
+    this.protectedSignature = signature;
+    this.protectionCheckedAt = Date.now();
   }
 
   noteFill(fill: FillPnlLike) {
@@ -136,6 +206,7 @@ export class Market {
       };
       this.fillPrints.push(print);
       if (this.feed.chart.addFill(print)) this.onVenueFill?.(print);
+      if (this.wallet && !this.seedingFills) this.refresh().catch(() => {});
     }
   }
 
@@ -143,9 +214,12 @@ export class Market {
     if (!this.address) return;
     try {
       const fills = await this.info.userFills({ user: this.address });
+      this.seedingFills = true;
       for (const f of fills) this.noteFill(f);
     } catch {
       // keep whatever WS has already delivered
+    } finally {
+      this.seedingFills = false;
     }
   }
 
@@ -217,7 +291,12 @@ export class Market {
     const open = this.lastOid;
     const cancel = open != null ? [open] : [];
     if (open != null) {
-      await this.ex!.cancel({ cancels: [{ a: this.assetId, o: open }] }).catch(() => {});
+      try {
+        await this.ex!.cancel({ cancels: [{ a: this.assetId, o: open }] });
+      } catch (e) {
+        this.warn("cancel before exit", e);
+        return { ...base, price: px, size, txHash: null, cancel: [], status: "reverted", orderId: null };
+      }
       this.forgetResting();
     }
     try {
@@ -268,7 +347,7 @@ export class Market {
 
       const oids = this.lastOid != null ? [this.lastOid] : cancel.filter((id) => id > 0);
       if (oids.length) {
-        await this.ex!.cancel({ cancels: oids.map((o) => ({ a: this.assetId, o })) }).catch(() => {});
+        await this.ex!.cancel({ cancels: oids.map((o) => ({ a: this.assetId, o })) });
         this.lastOid = null;
       }
 

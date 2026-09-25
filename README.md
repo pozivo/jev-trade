@@ -22,6 +22,8 @@ Based on [jev-trader](https://github.com/jarrodwatts/jev-trader) by Jarrod Watts
 
 A live key on testnet or mainnet sends real orders. Start with a dry run.
 
+For live sleeves, the bot uses position-linked, reduce-only stop market and take profit market triggers on Hyperliquid. Defaults are 1% below/above entry for the stop and 2% in the profitable direction for take profit. The venue checks its mark price. After a maker entry fills, the bot reads the position and places the stop first, then the take profit, and confirms both in open orders. An existing position must have matching TP/SL before the bot adds exposure; if protection cannot be confirmed, the entry is skipped. There is a gap between an initial maker fill and confirmation of its triggers. Market TP/SL orders can slip, and an outage during that gap leaves the position unprotected. Test on testnet and inspect open orders before using mainnet.
+
 ## How a tick works
 
 1. The bot reads the book.
@@ -115,6 +117,8 @@ See [`.env.example`](.env.example). The ones that change behavior:
 | `QUOTE_USD` | `40` | Quote notional per tick |
 | `MAX_POSITION_USD` | `200` | Maximum position notional per sleeve for additional entries; closes remain allowed |
 | `MAX_LEVERAGE` | `2` | Hard ceiling on leverage for new entries, even when Jev picks more |
+| `STOP_LOSS_BPS` | `100` | Position-linked stop market trigger, 1% from entry |
+| `TAKE_PROFIT_BPS` | `200` | Position-linked take profit market trigger, 2% from entry |
 | `CLOSE_SLIPPAGE_BPS` | `5` | How far an exit crosses the touch |
 | `PORT` | `3000` | Bot SSE |
 
