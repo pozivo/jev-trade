@@ -111,6 +111,7 @@ See [`.env.example`](.env.example). The ones that change behavior:
 | `PRICE_MS` | `200` | Chart and mid prints. Does not call Jev |
 | `QUOTE_USD` | `40` | Quote notional per tick |
 | `MAX_POSITION_USD` | `200` | Maximum position notional per sleeve for additional entries; closes remain allowed |
+| `MAX_LEVERAGE` | `2` | Hard ceiling on leverage for new entries, even when Jev picks more |
 | `CLOSE_SLIPPAGE_BPS` | `5` | How far an exit crosses the touch |
 | `PORT` | `3000` | Bot SSE |
 

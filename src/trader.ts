@@ -78,9 +78,10 @@ export class Trader {
         return;
       }
       try {
-        const decision = await this.model.decide(this.buildState(block, book));
+        const picked = await this.model.decide(this.buildState(block, book));
+        const decision = { ...picked, leverage: Math.min(picked.leverage, config.maxLeverage, this.market.maxLeverage) };
         this.totals.decisions++;
-        this.totals.jevUsd += (decision.inputTokens / 1e6) * config.jevUsdPerMTok;
+        if (this.model.name === "jev") this.totals.jevUsd += (decision.inputTokens / 1e6) * config.jevUsdPerMTok;
         const plan = capEntry(planQuote({
           intent: decision.intent,
           bias: decision.bias,
@@ -124,7 +125,7 @@ export class Trader {
       const quote = await this.market.send(plan.side, plan.size, book, cancel, plan.reduceOnly, plan.taker);
       if (seq !== this.sendSeq) return;
       this.applyPosted(block, quote);
-    });
+    }).catch((e) => console.error(`quote ${block}: ${(e as Error).message}`));
   }
 
   /** Jev held. Pull the standing quote so an order it no longer wants cannot get hit. */
@@ -135,7 +136,7 @@ export class Trader {
       await this.market.cancelResting();
       if (seq !== this.sendSeq) return;
       this.orders.clear();
-    });
+    }).catch((e) => console.error(`cancel resting: ${(e as Error).message}`));
   }
 
   private markLate(block: number, book: Book | null, timing?: Timing) {
@@ -243,8 +244,8 @@ export class Trader {
         unrealizedUsd: round(unrealized, 4),
       },
       indicators,
-      asset: { ...asset, maxLeverage: this.market.maxLeverage },
-      maxLeverage: this.market.maxLeverage,
+      asset: { ...asset, maxLeverage: Math.min(this.market.maxLeverage, config.maxLeverage) },
+      maxLeverage: Math.min(this.market.maxLeverage, config.maxLeverage),
     };
   }
 

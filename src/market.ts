@@ -173,7 +173,7 @@ export class Market {
       return leverage;
     } catch (e) {
       console.warn(`${this.label} leverage: ${(e as Error).message.slice(0, 160)}`);
-      return this.account?.leverage ?? leverage;
+      throw e;
     }
   }
 

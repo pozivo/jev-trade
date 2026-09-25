@@ -3,6 +3,7 @@ import type { Market } from "../src/market";
 import type { Model, ModelDecision } from "../src/model";
 import { capEntry, leverageRungs, liveIntent, parseLeverage, planQuote, quoteAction } from "../src/plan";
 import { jevUnavailable, Trader } from "../src/trader";
+import { config } from "../src/config";
 import type { BlockEvent, Book, Quote, Side } from "../src/types";
 
 test("jevUnavailable detects a TypeSafe credit 402", () => {
@@ -116,13 +117,20 @@ class FakeMarket {
   assetCtx = null;
   lastOid: number | null = null;
   cancels = 0;
+  sends = 0;
+  requestedLeverage: number | null = null;
+  failLeverage = false;
   sendDelayMs = 0;
   candleCloses() { return []; }
   refresh() { return Promise.resolve(); }
   readBook() { return book; }
   quoteSize() { return 0.01; }
-  setLeverage(n: number) { return Promise.resolve(n); }
+  setLeverage(n: number) {
+    this.requestedLeverage = n;
+    return this.failLeverage ? Promise.reject(new Error("leverage update failed")) : Promise.resolve(n);
+  }
   async send(side: Side, size: number, _book: Book, cancel: number[]): Promise<Quote> {
+    this.sends++;
     if (this.sendDelayMs) await Bun.sleep(this.sendDelayMs);
     this.lastOid = 4242;
     return {
@@ -190,4 +198,33 @@ test("a model failure pulls the preceding resting quote", async () => {
   await trader.onBlock(2);
   await Bun.sleep(0);
   expect(market.lastOid).toBeNull();
+});
+
+test("the hard leverage cap is applied before sending an entry", async () => {
+  const model = new ScriptModel();
+  const { trader, market, events } = desk(model);
+  model.next = packed({ intent: "open", bias: "long", action: "buy", leverage: 40 });
+  await trader.onBlock(1);
+  await Bun.sleep(0);
+  expect(market.requestedLeverage).toBe(config.maxLeverage);
+  expect(events[0]?.decision?.leverage).toBe(config.maxLeverage);
+  expect(market.sends).toBe(1);
+});
+
+test("a failed leverage update prevents the entry", async () => {
+  const model = new ScriptModel();
+  const { trader, market } = desk(model);
+  market.failLeverage = true;
+  model.next = packed({ intent: "open", bias: "long", action: "buy", leverage: 40 });
+  await trader.onBlock(1);
+  await Bun.sleep(0);
+  expect(market.sends).toBe(0);
+});
+
+test("mock model calls do not accrue Jev API costs", async () => {
+  const model = new ScriptModel();
+  const { trader, events } = desk(model);
+  model.next = packed({ intent: "hold", bias: "long", action: "hold", inputTokens: 1000 });
+  await trader.onBlock(1);
+  expect(events[0]?.totals.jevUsd).toBe(0);
 });
