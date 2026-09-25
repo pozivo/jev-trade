@@ -32,6 +32,9 @@ A live key on testnet or mainnet sends real orders. Start with a dry run.
 
 The bot is Bun on port 3000. The dashboard is Next in `web/` on port 3001. Keys, evaluate, and orders stay on the Bun process.
 
+The header shows **session net est.**: the change in trading PnL since the bot started, less estimated Jev API spend. In dry run it reads **sim net est.**; simulated fills exclude exchange fees and funding. The Jev estimate uses a fixed input-token rate in `src/config.ts` and may differ from your provider bill. Restarting the bot resets this session comparison.
+The History tab's **Net** column subtracts allocated entry and exit fees from each closed lot's PnL. It does not allocate Jev API spend or funding per lot; if the available fill tape begins after a position opened, its entry cost may be incomplete.
+
 ## Dry run
 
 [Bun](https://bun.sh) 1.2 or newer. No `PRIVATE_KEY` means a dry run: real book, real decisions, simulated fills. Default `MODEL=mock` is a momentum stand-in and needs no API key.

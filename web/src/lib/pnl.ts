@@ -33,6 +33,20 @@ export function portfolioPnl(latestByCoin: Record<string, BlockEvent | null | un
   return { unrealized, realized };
 }
 
+/** Session result, including the bot's estimated API spend. Dry-run venue fees are not simulated. */
+export function portfolioSession(latestByCoin: Record<string, BlockEvent | null | undefined>): {
+  net: number;
+  jevEstimate: number;
+} {
+  let net = 0;
+  let jevEstimate = 0;
+  for (const latest of Object.values(latestByCoin)) {
+    net += latest?.totals.sessionNetUsd ?? 0;
+    jevEstimate += latest?.totals.jevUsd ?? 0;
+  }
+  return { net, jevEstimate };
+}
+
 /** Sum of Hyperliquid account equity across sleeve wallets. */
 export function portfolioBalance(latestByCoin: Record<string, BlockEvent | null | undefined>): number | null {
   let sum = 0;

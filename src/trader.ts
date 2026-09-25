@@ -8,7 +8,7 @@ import type { BlockEvent, Book, Fill, PricePoint, Quote, Side, Timing, Totals } 
 
 const emptyTotals = (): Totals => ({
   blocks: 0, decisions: 0, quotes: 0, fills: 0, reverted: 0, lateBlocks: 0,
-  jevUsd: 0, gasSz: 0, gasUsd: 0, realizedUsd: 0, pnlUsd: 0, pnlSz: 0, pnlPct: 0,
+  jevUsd: 0, gasSz: 0, gasUsd: 0, realizedUsd: 0, pnlUsd: 0, pnlSz: 0, pnlPct: 0, sessionNetUsd: 0,
 });
 
 const JEV_PAUSE_MS = 30_000;
@@ -36,6 +36,7 @@ export class Trader {
   private position = { sz: 0, costUsd: 0 };
   private totals: Totals = emptyTotals();
   private jevPauseUntil = 0;
+  private startTradingPnl: number | null = null;
 
   constructor(
     private market: Market,
@@ -290,6 +291,10 @@ export class Trader {
     const a = this.market.account;
     const unrealized = a ? a.unrealizedUsd : this.unrealizedUsd(book.mid);
     t.pnlUsd = t.realizedUsd + unrealized - t.gasUsd;
+    // Wait for a live clearinghouse snapshot before taking a trading baseline.
+    // Otherwise historical venue PnL arriving later would look like this session's profit.
+    if (this.startTradingPnl === null && (!this.market.wallet || a)) this.startTradingPnl = t.pnlUsd;
+    t.sessionNetUsd = (this.startTradingPnl === null ? 0 : t.pnlUsd - this.startTradingPnl) - t.jevUsd;
     t.pnlSz = t.pnlUsd / book.mid;
     t.pnlPct = (t.pnlUsd / (a?.accountValue || config.bankrollUsd)) * 100;
     const size = Math.abs(this.position.sz);
@@ -319,7 +324,7 @@ export class Trader {
         unrealizedUsd: round(unrealized, 6),
         unrealizedSz: round(unrealized / book.mid, 8),
       },
-      totals: { ...t, jevUsd: round(t.jevUsd, 6), gasSz: round(t.gasSz, 8), gasUsd: round(t.gasUsd, 6), realizedUsd: round(t.realizedUsd, 6), pnlUsd: round(t.pnlUsd, 6), pnlSz: round(t.pnlSz, 8), pnlPct: round(t.pnlPct, 4) },
+      totals: { ...t, jevUsd: round(t.jevUsd, 6), gasSz: round(t.gasSz, 8), gasUsd: round(t.gasUsd, 6), realizedUsd: round(t.realizedUsd, 6), pnlUsd: round(t.pnlUsd, 6), pnlSz: round(t.pnlSz, 8), pnlPct: round(t.pnlPct, 4), sessionNetUsd: round(t.sessionNetUsd, 6) },
       accountValue: a && Number.isFinite(a.accountValue) ? round(a.accountValue, 2) : null,
       withdrawable: a && Number.isFinite(a.withdrawable) ? round(a.withdrawable, 2) : null,
     };

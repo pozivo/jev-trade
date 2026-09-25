@@ -109,6 +109,8 @@ export interface Totals {
   pnlUsd: number;
   pnlSz: number;
   pnlPct: number;
+  /** Change in trading PnL since process start, less estimated Jev API spending. */
+  sessionNetUsd: number;
 }
 
 export interface BlockEvent {

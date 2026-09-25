@@ -96,7 +96,7 @@ function packed(partial: Partial<ModelDecision> & Pick<ModelDecision, "intent" |
 }
 
 class ScriptModel implements Model {
-  readonly name = "script";
+  constructor(readonly name = "script") {}
   next: ModelDecision | Error = packed({ intent: "hold", bias: "long", action: "hold" });
   delayMs = 0;
   async decide(): Promise<ModelDecision> {
@@ -227,4 +227,13 @@ test("mock model calls do not accrue Jev API costs", async () => {
   model.next = packed({ intent: "hold", bias: "long", action: "hold", inputTokens: 1000 });
   await trader.onBlock(1);
   expect(events[0]?.totals.jevUsd).toBe(0);
+});
+
+test("session net includes estimated Jev API spend from the first decision", async () => {
+  const model = new ScriptModel("jev");
+  const { trader, events } = desk(model);
+  model.next = packed({ intent: "hold", bias: "long", action: "hold", inputTokens: 1000 });
+  await trader.onBlock(1);
+  expect(events[0]?.totals.jevUsd).toBeCloseTo(0.000042, 8);
+  expect(events[0]?.totals.sessionNetUsd).toBeCloseTo(-0.000042, 8);
 });
