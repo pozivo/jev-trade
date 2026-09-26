@@ -120,6 +120,7 @@ class FakeMarket {
   sends = 0;
   requestedLeverage: number | null = null;
   failLeverage = false;
+  failProtection = false;
   sendDelayMs = 0;
   candleCloses() { return []; }
   refresh() { return Promise.resolve(); }
@@ -128,6 +129,9 @@ class FakeMarket {
   setLeverage(n: number) {
     this.requestedLeverage = n;
     return this.failLeverage ? Promise.reject(new Error("leverage update failed")) : Promise.resolve(n);
+  }
+  ensureProtection() {
+    return this.failProtection ? Promise.reject(new Error("TP/SL not confirmed")) : Promise.resolve();
   }
   async send(side: Side, size: number, _book: Book, cancel: number[]): Promise<Quote> {
     this.sends++;
@@ -218,6 +222,17 @@ test("a failed leverage update prevents the entry", async () => {
   model.next = packed({ intent: "open", bias: "long", action: "buy", leverage: 40 });
   await trader.onBlock(1);
   await Bun.sleep(0);
+  expect(market.sends).toBe(0);
+});
+
+test("an unconfirmed venue protection prevents a new entry", async () => {
+  const model = new ScriptModel();
+  const { trader, market } = desk(model);
+  market.failProtection = true;
+  model.next = packed({ intent: "open", bias: "long", action: "buy" });
+  await trader.onBlock(1);
+  await Bun.sleep(0);
+  expect(market.requestedLeverage).toBeNull();
   expect(market.sends).toBe(0);
 });
 

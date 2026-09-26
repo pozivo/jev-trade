@@ -119,6 +119,8 @@ export class Trader {
       // An exit skips the leverage write: nothing about it depends on margin, and
       // the extra round trip is pure delay on the one order that has to land now.
       if (!plan.taker) {
+        await this.market.ensureProtection();
+        if (seq !== this.sendSeq) return;
         await this.market.setLeverage(decision.leverage);
         if (seq !== this.sendSeq) return;
       }
